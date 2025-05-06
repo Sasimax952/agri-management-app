@@ -1,0 +1,186 @@
+// Enhanced Service Worker for Agricultural Management App
+const APP_VERSION = 'v1.0.0';
+const CACHE_NAME = `agri-mgmt-cache-${APP_VERSION}`;
+const OFFLINE_URL = '/offline.html';
+
+// Files to cache for offline availability
+const PRECACHE_ASSETS = [
+  '/',
+  '/index.html',
+  '/manifest.json',
+  '/favicon.ico',
+  '/static/js/bundle.js',
+  '/static/css/main.css',
+  '/logo192.png',
+  '/logo512.png',
+  OFFLINE_URL
+];
+
+// Install Event - Caches essential assets
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME)
+      .then((cache) => {
+        console.log('[ServiceWorker] Caching app shell');
+        return cache.addAll(PRECACHE_ASSETS);
+      })
+      .then(() => self.skipWaiting())
+  );
+});
+
+// Activate Event - Cleans up old caches
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((cacheNames) => {
+      return Promise.all(
+        cacheNames.map((cacheName) => {
+          if (cacheName !== CACHE_NAME) {
+            console.log('[ServiceWorker] Deleting old cache:', cacheName);
+            return caches.delete(cacheName);
+          }
+        })
+      );
+    }).then(() => self.clients.claim())
+  );
+});
+
+// Fetch Event - Network falling back to cache
+self.addEventListener('fetch', (event) => {
+  // Skip non-GET requests
+  if (event.request.method !== 'GET') return;
+
+  // Handle API requests differently
+  if (event.request.url.includes('/api/')) {
+    return handleApiRequest(event);
+  }
+
+  // For all other requests, try network first, then cache
+  event.respondWith(
+    fetch(event.request)
+      .then((response) => {
+        // If valid response, cache it
+        if (response && response.status === 200) {
+          const responseToCache = response.clone();
+          caches.open(CACHE_NAME)
+            .then((cache) => cache.put(event.request, responseToCache));
+        }
+        return response;
+      })
+      .catch(() => {
+        // Network failed, try cache
+        return caches.match(event.request)
+          .then((response) => {
+            // Return cached response or offline page
+            return response || caches.match(OFFLINE_URL);
+          });
+      })
+  );
+});
+
+// Special handling for API requests
+function handleApiRequest(event) {
+  return event.respondWith(
+    fetch(event.request)
+      .then((response) => {
+        // Don't cache API responses by default
+        return response;
+      })
+      .catch(() => {
+        // For API requests, we might want to return cached data if available
+        return caches.match(event.request)
+          .then((response) => {
+            if (response) {
+              return response;
+            }
+            // Return empty response for API failures
+            return new Response(JSON.stringify({ error: 'Network offline' }), {
+              headers: { 'Content-Type': 'application/json' }
+            });
+          });
+      })
+  );
+}
+
+// Background Sync (optional)
+self.addEventListener('sync', (event) => {
+  if (event.tag === 'sync-data') {
+    console.log('[ServiceWorker] Background sync triggered');
+    // Implement your background sync logic here
+  }
+});
+
+// Push Notifications (optional)
+self.addEventListener('push', (event) => {
+  const data = event.data.json();
+  const options = {
+    body: data.body,
+    icon: '/logo192.png',
+    badge: '/logo192.png'
+  };
+
+  event.waitUntil(
+    self.registration.showNotification(data.title, options)
+  );
+});
+
+// Registration functions for React App
+export function register(config) {
+  if ('serviceWorker' in navigator) {
+    const publicUrl = new URL(process.env.PUBLIC_URL, window.location.href);
+    if (publicUrl.origin !== window.location.origin) {
+      return;
+    }
+
+    window.addEventListener('load', () => {
+      const swUrl = `${process.env.PUBLIC_URL}/service-worker.js`;
+
+      if (isLocalhost) {
+        checkValidServiceWorker(swUrl, config);
+        navigator.serviceWorker.ready.then(() => {
+          console.log('Service worker is ready for production.');
+        });
+      } else {
+        registerValidSW(swUrl, config);
+      }
+    });
+  }
+}
+
+function registerValidSW(swUrl, config) {
+  navigator.serviceWorker
+    .register(swUrl)
+    .then((registration) => {
+      registration.onupdatefound = () => {
+        const installingWorker = registration.installing;
+        if (installingWorker == null) {
+          return;
+        }
+        installingWorker.onstatechange = () => {
+          if (installingWorker.state === 'installed') {
+            if (navigator.serviceWorker.controller) {
+              console.log('New content is available; please refresh.');
+              if (config && config.onUpdate) {
+                config.onUpdate(registration);
+              }
+            } else {
+              console.log('Content is cached for offline use.');
+              if (config && config.onSuccess) {
+                config.onSuccess(registration);
+              }
+            }
+          }
+        };
+      };
+    })
+    .catch((error) => {
+      console.error('Error during service worker registration:', error);
+    });
+}
+
+export function unregister() {
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.ready.then((registration) => {
+      registration.unregister();
+    });
+  }
+}
